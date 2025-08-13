@@ -77,7 +77,33 @@
     }
 )
 
+(define-map notification-subscriptions
+    {
+        beneficiary: principal,
+        category: (string-ascii 50),
+    }
+    {
+        active: bool,
+        subscription-block: uint,
+        max-price: uint,
+        priority-level: uint,
+    }
+)
+
+(define-map pending-notifications
+    { notification-id: uint }
+    {
+        drug-id: uint,
+        batch-id: (string-ascii 50),
+        category: (string-ascii 50),
+        beneficiaries: (list 20 principal),
+        created-block: uint,
+        processed: bool,
+    }
+)
+
 (define-data-var next-claim-id uint u1)
+(define-data-var next-notification-id uint u1)
 
 (define-public (register-drug
         (name (string-ascii 100))
@@ -206,6 +232,8 @@
             distributed-quantity: u0,
             status: "available",
         })
+
+        (unwrap-panic (create-batch-notification drug-id batch-id (get category drug-data)))
         (ok true)
     )
 )
@@ -390,5 +418,121 @@
     })
         batch-data (- (get quantity batch-data) (get distributed-quantity batch-data))
         u0
+    )
+)
+
+(define-public (subscribe-to-category
+        (category (string-ascii 50))
+        (max-price uint)
+        (priority-level uint)
+    )
+    (let ((beneficiary-data (unwrap! (map-get? beneficiaries { beneficiary: tx-sender })
+            ERR_UNAUTHORIZED
+        )))
+        (asserts! (get eligible beneficiary-data) ERR_UNAUTHORIZED)
+        (asserts! (> (len category) u0) ERR_INVALID_PARAMETERS)
+        (asserts! (> max-price u0) ERR_INVALID_PARAMETERS)
+        (asserts! (<= priority-level u10) ERR_INVALID_PARAMETERS)
+
+        (map-set notification-subscriptions {
+            beneficiary: tx-sender,
+            category: category,
+        } {
+            active: true,
+            subscription-block: burn-block-height,
+            max-price: max-price,
+            priority-level: priority-level,
+        })
+        (ok true)
+    )
+)
+
+(define-public (unsubscribe-from-category (category (string-ascii 50)))
+    (let ((subscription-data (unwrap!
+            (map-get? notification-subscriptions {
+                beneficiary: tx-sender,
+                category: category,
+            })
+            ERR_NOT_FOUND
+        )))
+        (map-set notification-subscriptions {
+            beneficiary: tx-sender,
+            category: category,
+        }
+            (merge subscription-data { active: false })
+        )
+        (ok true)
+    )
+)
+
+(define-private (create-batch-notification
+        (drug-id uint)
+        (batch-id (string-ascii 50))
+        (category (string-ascii 50))
+    )
+    (let (
+            (notification-id (var-get next-notification-id))
+            (subscribers (get-category-subscribers category))
+        )
+        (map-set pending-notifications { notification-id: notification-id } {
+            drug-id: drug-id,
+            batch-id: batch-id,
+            category: category,
+            beneficiaries: subscribers,
+            created-block: burn-block-height,
+            processed: false,
+        })
+        (var-set next-notification-id (+ notification-id u1))
+        (ok notification-id)
+    )
+)
+
+(define-private (get-category-subscribers (category (string-ascii 50)))
+    (list)
+)
+
+(define-public (mark-notification-processed (notification-id uint))
+    (let ((notification-data (unwrap!
+            (map-get? pending-notifications { notification-id: notification-id })
+            ERR_NOT_FOUND
+        )))
+        (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+        (asserts! (not (get processed notification-data)) ERR_INVALID_PARAMETERS)
+
+        (map-set pending-notifications { notification-id: notification-id }
+            (merge notification-data { processed: true })
+        )
+        (ok true)
+    )
+)
+
+(define-read-only (get-subscription
+        (beneficiary principal)
+        (category (string-ascii 50))
+    )
+    (map-get? notification-subscriptions {
+        beneficiary: beneficiary,
+        category: category,
+    })
+)
+
+(define-read-only (get-pending-notification (notification-id uint))
+    (map-get? pending-notifications { notification-id: notification-id })
+)
+
+(define-read-only (get-next-notification-id)
+    (var-get next-notification-id)
+)
+
+(define-read-only (is-subscribed-to-category
+        (beneficiary principal)
+        (category (string-ascii 50))
+    )
+    (match (map-get? notification-subscriptions {
+        beneficiary: beneficiary,
+        category: category,
+    })
+        subscription-data (get active subscription-data)
+        false
     )
 )
