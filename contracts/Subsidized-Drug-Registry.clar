@@ -102,8 +102,51 @@
     }
 )
 
+(define-map inventory-reports
+    { report-id: uint }
+    {
+        drug-id: uint,
+        report-type: (string-ascii 20),
+        total-registered-batches: uint,
+        total-quantity-registered: uint,
+        total-quantity-distributed: uint,
+        total-claims-processed: uint,
+        average-claim-size: uint,
+        utilization-rate: uint,
+        report-period-start: uint,
+        report-period-end: uint,
+        generated-by: principal,
+        generated-block: uint,
+    }
+)
+
+(define-map drug-usage-stats
+    { drug-id: uint }
+    {
+        total-batches: uint,
+        total-quantity: uint,
+        distributed-quantity: uint,
+        pending-quantity: uint,
+        total-beneficiaries: uint,
+        last-updated-block: uint,
+    }
+)
+
+(define-map category-analytics
+    { category: (string-ascii 50) }
+    {
+        total-drugs: uint,
+        total-batches: uint,
+        total-claims: uint,
+        average-subsidy-rate: uint,
+        most-active-period: uint,
+        last-updated-block: uint,
+    }
+)
+
 (define-data-var next-claim-id uint u1)
 (define-data-var next-notification-id uint u1)
+(define-data-var next-report-id uint u1)
 
 (define-public (register-drug
         (name (string-ascii 100))
@@ -364,6 +407,135 @@
     )
 )
 
+(define-public (generate-drug-inventory-report
+        (drug-id uint)
+        (report-type (string-ascii 20))
+        (period-start uint)
+        (period-end uint)
+    )
+    (let (
+            (report-id (var-get next-report-id))
+            (drug-data (unwrap! (map-get? drugs { drug-id: drug-id }) ERR_NOT_FOUND))
+            (usage-stats (unwrap-panic (calculate-drug-usage-stats drug-id period-start period-end)))
+        )
+        (asserts!
+            (or
+                (is-eq tx-sender (get registrant drug-data))
+                (is-eq tx-sender CONTRACT_OWNER)
+                (is-some (map-get? validators { validator: tx-sender }))
+            )
+            ERR_UNAUTHORIZED
+        )
+        (asserts! (> (len report-type) u0) ERR_INVALID_PARAMETERS)
+        (asserts! (<= period-start period-end) ERR_INVALID_PARAMETERS)
+
+        (map-set inventory-reports { report-id: report-id } {
+            drug-id: drug-id,
+            report-type: report-type,
+            total-registered-batches: (get total-batches usage-stats),
+            total-quantity-registered: (get total-quantity usage-stats),
+            total-quantity-distributed: (get distributed-quantity usage-stats),
+            total-claims-processed: (get total-claims usage-stats),
+            average-claim-size: (get avg-claim-size usage-stats),
+            utilization-rate: (get utilization-rate usage-stats),
+            report-period-start: period-start,
+            report-period-end: period-end,
+            generated-by: tx-sender,
+            generated-block: burn-block-height,
+        })
+
+        (var-set next-report-id (+ report-id u1))
+        (ok report-id)
+    )
+)
+
+(define-public (update-drug-usage-stats (drug-id uint))
+    (let ((drug-data (unwrap! (map-get? drugs { drug-id: drug-id }) ERR_NOT_FOUND)))
+        (asserts!
+            (or
+                (is-eq tx-sender (get registrant drug-data))
+                (is-eq tx-sender CONTRACT_OWNER)
+            )
+            ERR_UNAUTHORIZED
+        )
+
+        (let ((stats (unwrap-panic (calculate-current-drug-stats drug-id))))
+            (map-set drug-usage-stats { drug-id: drug-id } stats)
+            (unwrap-panic (update-category-analytics (get category drug-data) drug-id))
+            (ok true)
+        )
+    )
+)
+
+(define-public (generate-category-report (category (string-ascii 50)))
+    (let ((analytics (default-to {
+            total-drugs: u0,
+            total-batches: u0,
+            total-claims: u0,
+            average-subsidy-rate: u0,
+            most-active-period: u0,
+            last-updated-block: burn-block-height,
+        }
+            (map-get? category-analytics { category: category })
+        )))
+        (asserts! (> (len category) u0) ERR_INVALID_PARAMETERS)
+        (map-set category-analytics { category: category }
+            (merge analytics { last-updated-block: burn-block-height })
+        )
+        (ok analytics)
+    )
+)
+
+(define-private (calculate-drug-usage-stats
+        (drug-id uint)
+        (period-start uint)
+        (period-end uint)
+    )
+    (ok {
+        total-batches: u0,
+        total-quantity: u0,
+        distributed-quantity: u0,
+        total-claims: u0,
+        avg-claim-size: u0,
+        utilization-rate: u0,
+    })
+)
+
+(define-private (calculate-current-drug-stats (drug-id uint))
+    (ok {
+        total-batches: u0,
+        total-quantity: u0,
+        distributed-quantity: u0,
+        pending-quantity: u0,
+        total-beneficiaries: u0,
+        last-updated-block: burn-block-height,
+    })
+)
+
+(define-private (update-category-analytics
+        (category (string-ascii 50))
+        (drug-id uint)
+    )
+    (let ((current-analytics (default-to {
+            total-drugs: u0,
+            total-batches: u0,
+            total-claims: u0,
+            average-subsidy-rate: u0,
+            most-active-period: u0,
+            last-updated-block: u0,
+        }
+            (map-get? category-analytics { category: category })
+        )))
+        (map-set category-analytics { category: category }
+            (merge current-analytics {
+                total-drugs: (+ (get total-drugs current-analytics) u1),
+                last-updated-block: burn-block-height,
+            })
+        )
+        (ok true)
+    )
+)
+
 (define-read-only (get-drug (drug-id uint))
     (map-get? drugs { drug-id: drug-id })
 )
@@ -534,5 +706,55 @@
     })
         subscription-data (get active subscription-data)
         false
+    )
+)
+
+(define-read-only (get-inventory-report (report-id uint))
+    (map-get? inventory-reports { report-id: report-id })
+)
+
+(define-read-only (get-drug-usage-stats (drug-id uint))
+    (map-get? drug-usage-stats { drug-id: drug-id })
+)
+
+(define-read-only (get-category-analytics (category (string-ascii 50)))
+    (map-get? category-analytics { category: category })
+)
+
+(define-read-only (get-next-report-id)
+    (var-get next-report-id)
+)
+
+(define-read-only (get-drug-utilization-rate (drug-id uint))
+    (match (map-get? drug-usage-stats { drug-id: drug-id })
+        stats-data (if (> (get total-quantity stats-data) u0)
+            (/ (* (get distributed-quantity stats-data) u100)
+                (get total-quantity stats-data)
+            )
+            u0
+        )
+        u0
+    )
+)
+
+(define-read-only (get-category-performance-summary (category (string-ascii 50)))
+    (match (map-get? category-analytics { category: category })
+        analytics-data
+        {
+            category: category,
+            total-drugs: (get total-drugs analytics-data),
+            total-batches: (get total-batches analytics-data),
+            total-claims: (get total-claims analytics-data),
+            average-subsidy-rate: (get average-subsidy-rate analytics-data),
+            last-updated: (get last-updated-block analytics-data),
+        }
+        {
+            category: category,
+            total-drugs: u0,
+            total-batches: u0,
+            total-claims: u0,
+            average-subsidy-rate: u0,
+            last-updated: u0,
+        }
     )
 )
