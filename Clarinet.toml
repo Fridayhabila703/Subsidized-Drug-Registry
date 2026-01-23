@@ -1,0 +1,33 @@
+[project]
+name = 'Subsidized-Drug-Registry'
+description = ''
+authors = []
+telemetry = true
+cache_dir = '.\.cache'
+requirements = []
+[contracts.Subsidized-Drug-Registry]
+path = 'contracts/Subsidized-Drug-Registry.clar'
+clarity_version = 3
+epoch = 3.0
+
+[contracts.drug-price-history]
+path = 'contracts/drug-price-history.clar'
+clarity_version = 3
+epoch = 3.0
+
+[contracts.drug-recall-system]
+path = 'contracts/drug-recall-system.clar'
+clarity_version = 3
+epoch = 3.0
+[repl.analysis]
+passes = ['check_checker']
+
+[repl.analysis.check_checker]
+strict = false
+trusted_sender = false
+trusted_caller = false
+callee_filter = false
+
+[repl.remote_data]
+enabled = false
+api_url = 'https://api.hiro.so'
