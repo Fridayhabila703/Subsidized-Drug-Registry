@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { Cl } from "@stacks/transactions";
 
 const accounts = simnet.getAccounts();
 const deployer = accounts.get("deployer")!;
@@ -29,32 +30,34 @@ describe("Drug Price History Tracking System - Simple Tests", () => {
 
   it("returns contract info as tuple", () => {
     const contractInfo = simnet.callReadOnlyFn(
-      "drug-price-history", 
-      "get-contract-info", 
-      [], 
+      "drug-price-history",
+      "get-contract-info",
+      [],
       deployer
     );
-    
-    const info = contractInfo.result.expectTuple();
-    expect(info["contract-owner"]).toBeStandardPrincipal(deployer);
-    expect(info["next-entry-id"]).toBeUint(1);
-    expect(info["next-alert-id"]).toBeUint(1);
-    expect(info["recording-fee"]).toBeUint(100000);
+
+    expect(contractInfo.result).toBeTuple({
+      "contract-owner": Cl.standardPrincipal(deployer),
+      "next-entry-id": Cl.uint(1),
+      "next-alert-id": Cl.uint(1),
+      "recording-fee": Cl.uint(100000),
+      "deployed-at": expect.anything(),
+    });
   });
 
   it("returns none for non-existent drug", () => {
     const nonExistentPrice = simnet.callReadOnlyFn(
       "drug-price-history",
       "get-current-price",
-      ["NON-EXISTENT-DRUG"],
+      [Cl.stringAscii("NON-EXISTENT-DRUG")],
       deployer
     );
     expect(nonExistentPrice.result).toBeNone();
-    
+
     const nonExistentStats = simnet.callReadOnlyFn(
       "drug-price-history",
       "get-drug-statistics",
-      ["NON-EXISTENT-DRUG"],
+      [Cl.stringAscii("NON-EXISTENT-DRUG")],
       deployer
     );
     expect(nonExistentStats.result).toBeNone();
@@ -64,7 +67,7 @@ describe("Drug Price History Tracking System - Simple Tests", () => {
     const nonExistentEntry = simnet.callReadOnlyFn(
       "drug-price-history",
       "get-price-entry",
-      [9999],
+      [Cl.uint(9999)],
       deployer
     );
     expect(nonExistentEntry.result).toBeNone();
@@ -75,134 +78,157 @@ describe("Drug Price History Tracking System - Simple Tests", () => {
       "drug-price-history",
       "register-drug-for-tracking",
       [
-        "PARACETAMOL-500MG",
-        "Paracetamol 500mg Tablets",
-        "Pain Relief",
-        1000000 // 1 STX initial price
+        Cl.stringAscii("PARACETAMOL-500MG"),
+        Cl.stringAscii("Paracetamol 500mg Tablets"),
+        Cl.stringAscii("Pain Relief"),
+        Cl.uint(1000000),
       ],
       deployer
     );
-    expect(registerResult.result).toBeOk(true);
-    
-    // Verify drug was registered
+    expect(registerResult.result).toBeOk(Cl.bool(true));
+
     const drugInfo = simnet.callReadOnlyFn(
       "drug-price-history",
       "get-tracked-drug",
-      ["PARACETAMOL-500MG"],
+      [Cl.stringAscii("PARACETAMOL-500MG")],
       deployer
     );
-    expect(drugInfo.result).toBeSome();
-    
-    const drug = drugInfo.result.expectSome().expectTuple();
-    expect(drug["name"]).toBeAscii("Paracetamol 500mg Tablets");
-    expect(drug["category"]).toBeAscii("Pain Relief");
-    expect(drug["registered-by"]).toBeStandardPrincipal(deployer);
-    expect(drug["active"]).toBeBool(true);
-    expect(drug["initial-price"]).toBeUint(1000000);
+    expect(drugInfo.result).toBeSome(expect.anything());
+
+    const drug = (drugInfo.result as any).value;
+    expect(drug).toBeTuple({
+      name: Cl.stringAscii("Paracetamol 500mg Tablets"),
+      category: Cl.stringAscii("Pain Relief"),
+      "registered-by": Cl.standardPrincipal(deployer),
+      "registration-date": expect.anything(),
+      active: Cl.bool(true),
+      "initial-price": Cl.uint(1000000),
+    });
   });
 
   it("initializes price data correctly", () => {
-    // Check current price was set
     const currentPrice = simnet.callReadOnlyFn(
       "drug-price-history",
       "get-current-price",
-      ["PARACETAMOL-500MG"],
+      [Cl.stringAscii("PARACETAMOL-500MG")],
       deployer
     );
-    expect(currentPrice.result).toBeSome();
-    
-    const price = currentPrice.result.expectSome().expectTuple();
-    expect(price["price"]).toBeUint(1000000);
-    expect(price["update-count"]).toBeUint(1);
-    
-    // Check statistics were initialized
+    expect(currentPrice.result).toBeSome(expect.anything());
+
+    const price = (currentPrice.result as any).value;
+    expect(price).toBeTuple({
+      price: Cl.uint(1000000),
+      "last-updated": expect.anything(),
+      "last-entry-id": Cl.uint(0),
+      "update-count": Cl.uint(1),
+    });
+
     const stats = simnet.callReadOnlyFn(
       "drug-price-history",
       "get-drug-statistics",
-      ["PARACETAMOL-500MG"],
+      [Cl.stringAscii("PARACETAMOL-500MG")],
       deployer
     );
-    expect(stats.result).toBeSome();
-    
-    const statistics = stats.result.expectSome().expectTuple();
-    expect(statistics["min-price"]).toBeUint(1000000);
-    expect(statistics["max-price"]).toBeUint(1000000);
-    expect(statistics["average-price"]).toBeUint(1000000);
-    expect(statistics["total-entries"]).toBeUint(1);
-    expect(statistics["volatility-score"]).toBeUint(0);
+    expect(stats.result).toBeSome(expect.anything());
+
+    const statistics = (stats.result as any).value;
+    expect(statistics).toBeTuple({
+      "min-price": Cl.uint(1000000),
+      "max-price": Cl.uint(1000000),
+      "average-price": Cl.uint(1000000),
+      "total-entries": Cl.uint(1),
+      "first-recorded": expect.anything(),
+      "last-updated": expect.anything(),
+      "volatility-score": Cl.uint(0),
+    });
   });
 
   it("prevents duplicate drug registration", () => {
-    // Try to register same drug again
     const duplicateResult = simnet.callPublicFn(
       "drug-price-history",
       "register-drug-for-tracking",
-      ["PARACETAMOL-500MG", "Aspirin Different", "Different Category", 900000],
+      [
+        Cl.stringAscii("PARACETAMOL-500MG"),
+        Cl.stringAscii("Aspirin Different"),
+        Cl.stringAscii("Different Category"),
+        Cl.uint(900000),
+      ],
       deployer
     );
-    expect(duplicateResult.result).toBeErr(207); // ERR_ALREADY_EXISTS
+    expect(duplicateResult.result).toBeErr(Cl.uint(207));
   });
 
   it("allows owner to authorize price recorders", () => {
     const authResult = simnet.callPublicFn(
       "drug-price-history",
       "authorize-price-recorder",
-      [wallet1, "PARACETAMOL-500MG"],
+      [Cl.standardPrincipal(wallet1), Cl.stringAscii("PARACETAMOL-500MG")],
       deployer
     );
-    expect(authResult.result).toBeOk(true);
-    
-    // Verify authorization
+    expect(authResult.result).toBeOk(Cl.bool(true));
+
     const isAuthorized = simnet.callReadOnlyFn(
       "drug-price-history",
       "is-price-recorder-authorized",
-      [wallet1, "PARACETAMOL-500MG"],
+      [Cl.standardPrincipal(wallet1), Cl.stringAscii("PARACETAMOL-500MG")],
       deployer
     );
     expect(isAuthorized.result).toBeBool(true);
   });
 
   it("allows authorized users to record price changes", () => {
-    // Record price change
     const recordResult = simnet.callPublicFn(
       "drug-price-history",
       "record-price-change",
-      ["PARACETAMOL-500MG", 1200000, "Market price increase"],
+      [
+        Cl.stringAscii("PARACETAMOL-500MG"),
+        Cl.uint(1200000),
+        Cl.stringAscii("Market price increase"),
+      ],
       wallet1
     );
-    expect(recordResult.result).toBeOk(1); // Entry ID 1
-    
-    // Verify price was updated
+    expect(recordResult.result).toBeOk(Cl.uint(1));
+
     const newPrice = simnet.callReadOnlyFn(
       "drug-price-history",
       "get-current-price",
-      ["PARACETAMOL-500MG"],
+      [Cl.stringAscii("PARACETAMOL-500MG")],
       deployer
     );
-    const priceData = newPrice.result.expectSome().expectTuple();
-    expect(priceData["price"]).toBeUint(1200000);
-    expect(priceData["update-count"]).toBeUint(2); // Initial + this update
+    expect(newPrice.result).toBeSome(expect.anything());
+
+    const priceData = (newPrice.result as any).value;
+    expect(priceData).toBeTuple({
+      price: Cl.uint(1200000),
+      "last-updated": expect.anything(),
+      "last-entry-id": Cl.uint(1),
+      "update-count": Cl.uint(2),
+    });
   });
 
   it("prevents unauthorized users from recording prices", () => {
     const unauthorizedRecord = simnet.callPublicFn(
       "drug-price-history",
       "record-price-change",
-      ["PARACETAMOL-500MG", 1300000, "Unauthorized attempt"],
-      wallet2 // Not authorized
+      [
+        Cl.stringAscii("PARACETAMOL-500MG"),
+        Cl.uint(1300000),
+        Cl.stringAscii("Unauthorized attempt"),
+      ],
+      wallet2
     );
-    expect(unauthorizedRecord.result).toBeErr(200); // ERR_UNAUTHORIZED
+    expect(unauthorizedRecord.result).toBeErr(Cl.uint(200));
   });
 
   it("allows owner to set recording fee", () => {
     const setFeeResult = simnet.callPublicFn(
       "drug-price-history",
       "set-recording-fee",
-      [200000], // New fee: 0.2 STX
+      [Cl.uint(200000)],
       deployer
     );
-    expect(setFeeResult.result).toBeOk(true);
-    
+    expect(setFeeResult.result).toBeOk(Cl.bool(true));
+
     const newFee = simnet.callReadOnlyFn("drug-price-history", "get-recording-fee", [], deployer);
     expect(newFee.result).toBeUint(200000);
   });
@@ -211,9 +237,9 @@ describe("Drug Price History Tracking System - Simple Tests", () => {
     const unauthorizedFee = simnet.callPublicFn(
       "drug-price-history",
       "set-recording-fee",
-      [300000],
+      [Cl.uint(300000)],
       wallet1
     );
-    expect(unauthorizedFee.result).toBeErr(200); // ERR_UNAUTHORIZED
+    expect(unauthorizedFee.result).toBeErr(Cl.uint(200));
   });
 });

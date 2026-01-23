@@ -5,6 +5,7 @@
 (define-constant ERR_INVALID_PARAMETERS (err u103))
 (define-constant ERR_EXPIRED (err u104))
 (define-constant ERR_INSUFFICIENT_BALANCE (err u105))
+(define-constant ERR_INSUFFICIENT_SUBSIDY_POOL (err u106))
 
 (define-data-var next-drug-id uint u1)
 (define-data-var registry-fee uint u1000000)
@@ -75,6 +76,11 @@
         claim-block: uint,
         approved: bool,
     }
+)
+
+(define-map drug-subsidy-pools
+    { drug-id: uint }
+    { balance: uint }
 )
 
 (define-map notification-subscriptions
@@ -322,7 +328,8 @@
             (beneficiary-data (unwrap! (map-get? beneficiaries { beneficiary: tx-sender })
                 ERR_UNAUTHORIZED
             ))
-            (claim-amount (* quantity (get subsidized-price drug-data)))
+            (subsidy-per-unit (- (get original-price drug-data) (get subsidized-price drug-data)))
+            (claim-amount (* quantity subsidy-per-unit))
             (available-quantity (- (get quantity batch-data) (get distributed-quantity batch-data)))
         )
         (asserts! (get eligible beneficiary-data) ERR_UNAUTHORIZED)
@@ -367,9 +374,21 @@
                 (map-get? beneficiaries { beneficiary: (get beneficiary claim-data) })
                 ERR_NOT_FOUND
             ))
+            (pool-data (default-to { balance: u0 }
+                (map-get? drug-subsidy-pools { drug-id: (get drug-id claim-data) })
+            ))
+            (claim-amount (get claim-amount claim-data))
+            (recipient (get beneficiary claim-data))
         )
         (asserts! (is-eq tx-sender (get registrant drug-data)) ERR_UNAUTHORIZED)
         (asserts! (not (get approved claim-data)) ERR_INVALID_PARAMETERS)
+        (asserts! (>= (get balance pool-data) claim-amount) ERR_INSUFFICIENT_SUBSIDY_POOL)
+
+        (try! (as-contract (stx-transfer? claim-amount tx-sender recipient)))
+
+        (map-set drug-subsidy-pools { drug-id: (get drug-id claim-data) }
+            { balance: (- (get balance pool-data) claim-amount) }
+        )
 
         (map-set drug-claims { claim-id: claim-id }
             (merge claim-data { approved: true })
@@ -383,9 +402,60 @@
         )
 
         (map-set beneficiaries { beneficiary: (get beneficiary claim-data) }
-            (merge beneficiary-data { total-claimed: (+ (get total-claimed beneficiary-data) (get claim-amount claim-data)) })
+            (merge beneficiary-data { total-claimed: (+ (get total-claimed beneficiary-data) claim-amount) })
         )
         (ok true)
+    )
+)
+
+(define-public (fund-drug-subsidy (drug-id uint) (amount uint))
+    (let (
+            (drug-data (unwrap! (map-get? drugs { drug-id: drug-id }) ERR_NOT_FOUND))
+            (pool-data (default-to { balance: u0 }
+                (map-get? drug-subsidy-pools { drug-id: drug-id })
+            ))
+            (new-balance (+ (get balance pool-data) amount))
+        )
+        (asserts!
+            (or
+                (is-eq tx-sender (get registrant drug-data))
+                (is-eq tx-sender CONTRACT_OWNER)
+            )
+            ERR_UNAUTHORIZED
+        )
+        (asserts! (> amount u0) ERR_INVALID_PARAMETERS)
+
+        (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+
+        (map-set drug-subsidy-pools { drug-id: drug-id } { balance: new-balance })
+        (ok new-balance)
+    )
+)
+
+(define-public (withdraw-drug-subsidy (drug-id uint) (amount uint))
+    (let (
+            (recipient tx-sender)
+            (drug-data (unwrap! (map-get? drugs { drug-id: drug-id }) ERR_NOT_FOUND))
+            (pool-data (default-to { balance: u0 }
+                (map-get? drug-subsidy-pools { drug-id: drug-id })
+            ))
+            (balance (get balance pool-data))
+            (new-balance (- balance amount))
+        )
+        (asserts!
+            (or
+                (is-eq tx-sender (get registrant drug-data))
+                (is-eq tx-sender CONTRACT_OWNER)
+            )
+            ERR_UNAUTHORIZED
+        )
+        (asserts! (> amount u0) ERR_INVALID_PARAMETERS)
+        (asserts! (>= balance amount) ERR_INSUFFICIENT_SUBSIDY_POOL)
+
+        (try! (as-contract (stx-transfer? amount tx-sender recipient)))
+
+        (map-set drug-subsidy-pools { drug-id: drug-id } { balance: new-balance })
+        (ok new-balance)
     )
 )
 
@@ -715,6 +785,13 @@
 
 (define-read-only (get-drug-usage-stats (drug-id uint))
     (map-get? drug-usage-stats { drug-id: drug-id })
+)
+
+(define-read-only (get-drug-subsidy-pool-balance (drug-id uint))
+    (match (map-get? drug-subsidy-pools { drug-id: drug-id })
+        pool-data (get balance pool-data)
+        u0
+    )
 )
 
 (define-read-only (get-category-analytics (category (string-ascii 50)))

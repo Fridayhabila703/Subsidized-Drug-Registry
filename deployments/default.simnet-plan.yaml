@@ -69,4 +69,9 @@ plan:
             emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
             path: contracts/drug-price-history.clar
             clarity-version: 3
-      epoch: "3.1"
+        - emulated-contract-publish:
+            contract-name: drug-recall-system
+            emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+            path: contracts/drug-recall-system.clar
+            clarity-version: 3
+      epoch: "3.0"
